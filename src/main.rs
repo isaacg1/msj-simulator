@@ -3,7 +3,7 @@ use rand::prelude::*;
 use rand_distr::weighted_alias::WeightedAliasIndex;
 use rand_distr::Exp;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use std::f64::INFINITY;
 const EPSILON: f64 = 1e-7;
@@ -63,25 +63,70 @@ impl Dist {
             .map(|(_, mu_i, p_i)| p_i / mu_i)
             .sum()
     }
+    fn max_work(&self, num_servers: u64) -> f64 {
+        assert!(num_servers.is_power_of_two());
+        self.servers_rates_probs
+            .iter()
+            .for_each(|(n_i, _, _)| assert!(n_i.is_power_of_two()));
+        let max_size = self
+            .servers_rates_probs
+            .iter()
+            .map(|&(n_i, mu_i, _)| n_i as f64 / mu_i)
+            .max_by_key(|&f| n64(f))
+            .expect("Nonempty");
+        let log_num_servers = 63 - num_servers.leading_zeros();
+        let filling: f64 = (0..log_num_servers)
+            .map(|j| {
+                let sub_servers = 1 << j;
+                self.servers_rates_probs
+                    .iter()
+                    .map(|&(n_i, mu_i, _)| {
+                        if n_i <= sub_servers {
+                            sub_servers as f64 / mu_i
+                        } else {
+                            0.0
+                        }
+                    })
+                    .max_by_key(|&f| n64(f))
+                    .unwrap_or(0.0)
+            })
+            .sum();
+        max_size + filling
+    }
 }
 
 #[derive(Debug)]
 enum Policy {
+    // Preemptive
     ServerFilling,
+    PreemptiveFirstFit,
+    MaxWeight,
+    LeastServersFirst,
+    MostServersFirst,
+    // Nonpreemptive
     FCFS,
     BestFit,
     FirstFit,
     EASYBackfilling,
     ConservativeBackfilling,
-    MaxWeight,
     RandomizedTimers,
     StallingMaxWeight(f64),
-    LeastServersFirst,
-    MostServersFirst,
 }
 
 impl Policy {
-    fn serve(&self, queue: &Vec<Job>, num_servers: u64) -> Vec<usize> {
+    fn has_shadow(&self) -> bool {
+        match self {
+            Policy::ServerFilling | Policy::PreemptiveFirstFit | Policy::FCFS => false,
+            Policy::MaxWeight | Policy::LeastServersFirst | Policy::MostServersFirst => true,
+            _ => unimplemented!(),
+        }
+    }
+    fn serve(
+        &self,
+        queue: &Vec<Job>,
+        num_servers: u64,
+        shadow_indices: &mut Vec<usize>,
+    ) -> Vec<usize> {
         let indices = match self {
             Policy::ServerFilling => {
                 let mut front_size = 0;
@@ -123,7 +168,7 @@ impl Policy {
                 }
                 service
             }
-            Policy::FirstFit => {
+            Policy::PreemptiveFirstFit => {
                 let mut servers_occupied = 0;
                 let mut service = vec![];
                 for (i, job) in queue.iter().enumerate() {
@@ -131,11 +176,110 @@ impl Policy {
                         servers_occupied += job.num_servers;
                         service.push(i);
                         if servers_occupied == num_servers {
-                            break
+                            break;
                         }
                     }
                 }
                 service
+            }
+            Policy::MaxWeight => {
+                if queue.is_empty() {
+                    vec![]
+                } else {
+                    let mut counts: HashMap<u64, u64> = HashMap::new();
+                    for job in queue {
+                        *counts.entry(job.num_servers).or_insert(0) += 1;
+                    }
+                    let (best_n, count) = counts
+                        .iter()
+                        .max_by_key(|&(n_i, count)| count * num_servers / n_i)
+                        .expect("Nonempty");
+                    if best_n * count >= num_servers {
+                        (0..queue.len())
+                            .filter(|&i| queue[i].num_servers == *best_n)
+                            .take((num_servers / best_n) as usize)
+                            .collect()
+                    } else {
+                        shadow_indices.sort_by_key(|&i| {
+                            let n_i = queue[i].num_servers;
+                            let count_i = counts[&n_i];
+                            -((count_i * num_servers / n_i) as i64)
+                        });
+                        let mut servers_occupied = 0;
+                        let mut service = vec![];
+                        for &i in shadow_indices.iter() {
+                            let job = &queue[i];
+                            if servers_occupied + job.num_servers <= num_servers {
+                                servers_occupied += job.num_servers;
+                                service.push(i);
+                                if servers_occupied == num_servers {
+                                    break;
+                                }
+                            }
+                        }
+                        service
+                    }
+                }
+            }
+            Policy::LeastServersFirst => {
+                let smallest: Vec<usize> = queue
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, job)| job.num_servers == 1)
+                    .take(num_servers as usize)
+                    .map(|(i, _)| i)
+                    .collect();
+                if smallest.len() == num_servers as usize {
+                    smallest
+                } else {
+                    shadow_indices.sort_by_key(|&i| {
+                        let n_i = queue[i].num_servers;
+                        n_i
+                    });
+                    let mut servers_occupied = 0;
+                    let mut service = vec![];
+                    for &i in shadow_indices.iter() {
+                        let job = &queue[i];
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                            if servers_occupied == num_servers {
+                                break;
+                            }
+                        }
+                    }
+                    service
+                }
+            }
+            Policy::MostServersFirst => {
+                let largest: Vec<usize> = queue
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, job)| job.num_servers == num_servers)
+                    .take(1)
+                    .map(|(i, _)| i)
+                    .collect();
+                if largest.len() == num_servers as usize {
+                    largest
+                } else {
+                    shadow_indices.sort_by_key(|&i| {
+                        let n_i = queue[i].num_servers;
+                        -(n_i as i64)
+                    });
+                    let mut servers_occupied = 0;
+                    let mut service = vec![];
+                    for &i in shadow_indices.iter() {
+                        let job = &queue[i];
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                            if servers_occupied == num_servers {
+                                break;
+                            }
+                        }
+                    }
+                    service
+                }
             }
             _ => todo!(),
         };
@@ -170,6 +314,15 @@ struct Results {
     mean_queueing_time: f64,
     mean_monotonic_queueing_time: f64,
 }
+impl Results {
+    fn new_failure() -> Results {
+        Results {
+            mean_response_time: INFINITY,
+            mean_queueing_time: INFINITY,
+            mean_monotonic_queueing_time: INFINITY,
+        }
+    }
+}
 
 fn simulate(
     policy: &Policy,
@@ -178,9 +331,11 @@ fn simulate(
     rho: f64,
     num_jobs: u64,
     seed: u64,
+    kill_above: usize,
 ) -> Results {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut queue: Vec<Job> = Vec::new();
+    let mut shadow_indices: Vec<usize> = Vec::new();
     let mut time: f64 = 0.0;
     let mean_size = dist.mean_size();
     let mean_absolute_size = mean_size / num_servers as f64;
@@ -193,13 +348,13 @@ fn simulate(
     let mut served_and_incomplete: HashSet<N64> = HashSet::new();
     let mut newest_served = None;
     let debug = false;
-    while num_completed < num_jobs {
-        let service = policy.serve(&queue, num_servers);
+    while num_completed < num_jobs || queue.len() > 0 {
+        if queue.len() > kill_above {
+            return Results::new_failure();
+        }
+        let service = policy.serve(&queue, num_servers, &mut shadow_indices);
         if debug {
-            dbg!(
-                &queue,
-                &service,
-            );
+            dbg!(&queue, &service,);
             std::io::stdin().read_line(&mut String::new()).unwrap();
         }
         let min_service: f64 = service
@@ -258,6 +413,20 @@ fn simulate(
             }
             for index in removal_indexes.into_iter().rev() {
                 let job = queue.remove(index);
+                if policy.has_shadow() {
+                    shadow_indices = shadow_indices
+                        .into_iter()
+                        .filter_map(|i| {
+                            if i < index {
+                                Some(i)
+                            } else if i == index {
+                                None
+                            } else {
+                                Some(i - 1)
+                            }
+                        })
+                        .collect();
+                }
                 if job.remaining_service < -EPSILON {
                     dbg!(&queue);
                     dbg!(&job);
@@ -275,53 +444,227 @@ fn simulate(
             }
         } else {
             next_arrival_time = time + arrival_dist.sample(&mut rng);
-            let (n, service) = dist.sample(&mut rng);
-            let new_job = Job {
-                arrival_time: time,
-                remaining_service: service,
-                num_servers: n,
-            };
-            queue.push(new_job);
-            num_arrivals += 1;
+            if num_arrivals < num_jobs {
+                let (n, service) = dist.sample(&mut rng);
+                let new_job = Job {
+                    arrival_time: time,
+                    remaining_service: service,
+                    num_servers: n,
+                };
+                queue.push(new_job);
+                if policy.has_shadow() {
+                    shadow_indices.push(queue.len() - 1);
+                }
+                num_arrivals += 1;
+            }
         }
     }
     if queue.len() > 100 {
-        println!("Warning: {} jobs left incomplete. Results not accurate.", queue.len());
+        println!(
+            "Warning: {} jobs left incomplete. Results not accurate.",
+            queue.len()
+        );
     }
     recording.output()
 }
 
-fn main() {
-    let rho = 0.9;
-    //Smaller are faster, more common
-    let dist_list = vec![(1, 5.0, 0.9), (2, 2.0, 0.09), (4, 0.5, 0.01)];
+fn gaps() {
+    let rho = 0.9975;
+    let num_servers = 8;
+    let num_jobs = 40_000_000;
+    let seed = 0;
+    println!("weight,gap,SF,PFF,MG1,MG1+w_max");
+    for log_weight in 1..10 {
+        let weight = 1.0 / (1 << log_weight) as f64;
+        let dist_list = vec![(1, 1.0, weight), (num_servers, 1e10, 1.0 - weight)];
+        let dist = Dist::new(&dist_list);
+        let result_PFF = simulate(
+            &Policy::PreemptiveFirstFit,
+            dist.clone(),
+            num_servers,
+            rho,
+            num_jobs,
+            seed,
+            50000,
+        );
+        let result_SF = simulate(
+            &Policy::ServerFilling,
+            dist.clone(),
+            num_servers,
+            rho,
+            num_jobs,
+            seed,
+            50000,
+        );
+        let gap = result_PFF.mean_response_time - result_SF.mean_response_time;
+        let mg1 = rho * (dist.mean_size_excess() / num_servers as f64) / (1.0 - rho);
+        println!(
+            "{},{},{},{},{},{}",
+            weight,
+            gap,
+            result_PFF.mean_response_time,
+            result_SF.mean_response_time,
+            mg1,
+            mg1 + dist.max_work(num_servers),
+        );
+    }
+}
+
+fn many() {
+    let rho = 0.99;
+    for setting in 0..=5 {
+        println!("setting {}", setting);
+        let (num_servers, dist_list) = match setting {
+            0 => (4, vec![(1, 5.0, 0.9), (2, 2.0, 0.09), (4, 0.5, 0.01)]),
+            1 => (
+                4,
+                vec![
+                    (1, 5.0, 1.0 / 3.0),
+                    (2, 2.0, 1.0 / 3.0),
+                    (4, 0.5, 1.0 / 3.0),
+                ],
+            ),
+            2 => (
+                4,
+                vec![
+                    (1, 1.0, 1.0 / 3.0),
+                    (2, 1.0, 1.0 / 3.0),
+                    (4, 1.0, 1.0 / 3.0),
+                ],
+            ),
+            3 => (
+                4,
+                vec![
+                    (1, 1.0, 1.0 / 3.0),
+                    (2, 2.0, 1.0 / 3.0),
+                    (4, 4.0, 1.0 / 3.0),
+                ],
+            ),
+            4 => (
+                4,
+                vec![
+                    (1, 1.0, 4.0 / 7.0),
+                    (2, 8.0, 2.0 / 7.0),
+                    (4, 64.0, 1.0 / 7.0),
+                ],
+            ),
+            5 => (8, vec![(1, 1.0, 1.0 / 100.0), (8, 1000000.0, 99.0 / 100.0)]),
+            _ => unimplemented!(),
+        };
+
+        let dist = Dist::new(&dist_list);
+        println!(
+            "E[s] {}, E[service] {}",
+            dist.mean_size(),
+            dist.mean_service_time()
+        );
+        let num_jobs = 10_000_000;
+        let seed = 0;
+        println!(
+            "num_jobs {}, num_servers {}, rho {}, e[t_q^mg1] {}, w_max {}, dist {:?}",
+            num_jobs,
+            num_servers,
+            rho,
+            rho * (dist.mean_size_excess() / num_servers as f64) / (1.0 - rho),
+            dist.max_work(num_servers),
+            dist_list
+        );
+        let policies = vec![
+            Policy::ServerFilling,
+            Policy::FCFS,
+            Policy::PreemptiveFirstFit,
+            Policy::MaxWeight,
+            Policy::LeastServersFirst,
+            Policy::MostServersFirst,
+        ];
+        for policy in &policies {
+            let results = simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
+            println!(
+                "{:?},{},{},{}",
+                policy,
+                results.mean_response_time,
+                results.mean_queueing_time,
+                results.mean_monotonic_queueing_time
+            );
+        }
+        println!();
+    }
+}
+
+fn plots() {
     let num_servers = 4;
 
-    let dist = Dist::new(&dist_list);
-    println!(
-        "E[S] {}, E[service] {}",
-        dist.mean_size(),
-        dist.mean_service_time()
-    );
-    let num_jobs = 1_000_000;
-    let seed = 0;
-    println!(
-        "num_jobs {}, num_servers {}, rho {}, E[T_Q^MG1] {}, dist {:?}",
-        num_jobs,
-        num_servers,
-        rho,
-        rho * (dist.mean_size_excess()/ num_servers as f64) / (1.0 - rho),
-        dist_list
-    );
-    let policies = vec![Policy::FirstFit, Policy::FCFS, Policy::ServerFilling];
-    for policy in &policies {
-        let results = simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed);
-        println!(
-            "{:?},{},{},{}",
-            policy,
-            results.mean_response_time,
-            results.mean_queueing_time,
-            results.mean_monotonic_queueing_time
-        );
+    let policies = vec![
+        Policy::ServerFilling,
+        Policy::FCFS,
+        Policy::PreemptiveFirstFit,
+        Policy::MaxWeight,
+        Policy::LeastServersFirst,
+        Policy::MostServersFirst,
+    ];
+
+    for num_jobs in vec![1_000_000, 10_000_000] {
+        for dist_list in vec![
+            vec![
+                (1, 5.0, 1.0 / 3.0),
+                (2, 2.0, 1.0 / 3.0),
+                (4, 0.5, 1.0 / 3.0),
+            ],
+            vec![
+                (1, 1.0, 4.0 / 7.0),
+                (2, 8.0, 2.0 / 7.0),
+                (4, 64.0, 1.0 / 7.0),
+            ],
+        ] {
+            let dist = Dist::new(&dist_list);
+            println!(
+                "E[s] {}, E[service] {}, dist {:?}, num_jobs {}, num_servers {}",
+                dist.mean_size(),
+                dist.mean_service_time(),
+                dist_list,
+                num_jobs,
+                num_servers,
+            );
+            print!("rho,E[T_Q^MG1],E[T_Q^MG1] + w_max,");
+            for policy in &policies {
+                print!("{:?} min,{:?} max", policy, policy);
+            }
+            println!();
+            for rho in vec![0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99] {
+                let mut all_means = vec![];
+                for policy in &policies {
+                    let mut min_mean = INFINITY;
+                    let mut max_mean = 0.0;
+                    for seed in 0..5 {
+                        let results =
+                            simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
+                        min_mean = min_mean.min(results.mean_response_time);
+                        max_mean = max_mean.max(results.mean_response_time);
+                    }
+                    all_means.push((min_mean, max_mean));
+                }
+                let all_data: String = all_means
+                    .iter()
+                    .map(|(a, b)| format!("{},{},", a, b))
+                    .collect();
+                let mg1_etq = rho * (dist.mean_size_excess() / num_servers as f64) / (1.0 - rho);
+                println!(
+                    "{},{},{},{}",
+                    rho,
+                    mg1_etq,
+                    mg1_etq + dist.max_work(num_servers),
+                    all_data,
+                );
+            }
+        }
+    }
+}
+fn main() {
+    let kind = 2;
+    match kind {
+        0 => many(),
+        1 => gaps(),
+        2 => plots(),
+        _ => unimplemented!(),
     }
 }
