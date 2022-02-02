@@ -6,7 +6,7 @@ use rand_distr::Exp;
 use std::collections::{HashMap, HashSet};
 
 use std::f64::INFINITY;
-const EPSILON: f64 = 1e-7;
+const EPSILON: f64 = 1e-6;
 
 #[derive(Debug)]
 struct Job {
@@ -150,6 +150,7 @@ impl Policy {
                             break;
                         }
                     } else {
+                        dbg!(queue, num_servers);
                         unreachable!()
                     }
                 }
@@ -592,71 +593,73 @@ fn many() {
 }
 
 fn plots() {
-    let num_servers = 4;
+    //let num_servers = 4;
+    let seed = 0;
 
     let policies = vec![
         Policy::ServerFilling,
+        /*
         Policy::FCFS,
-        Policy::PreemptiveFirstFit,
+        //Policy::PreemptiveFirstFit,
         Policy::MaxWeight,
         Policy::LeastServersFirst,
         Policy::MostServersFirst,
+        */
     ];
+    let rhos = vec![
+        0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.72,
+        0.74, 0.76, 0.78, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.92, 0.94,
+        0.96, /*0.903, 0.906, 0.91, 0.913, 0.916, 0.92,
+              0.923, 0.926, 0.93, 0.933, 0.936, 0.94, 0.943, 0.946, 0.95, 0.953, 0.956, 0.96, 0.97,
+              0.973, 0.976, 0.98, 0.983, 0.986, 0.99, 0.993, 0.996,*/
+    ];
+    //let rhos = vec![0.86, 0.88, 0.9, 0.92, 0.94, 0.96];
+    //let num_jobs = 1e8 as u64;
 
-    for num_jobs in vec![1_000_000, 10_000_000] {
-        for dist_list in vec![
-            vec![
-                (1, 5.0, 1.0 / 3.0),
-                (2, 2.0, 1.0 / 3.0),
-                (4, 0.5, 1.0 / 3.0),
-            ],
-            vec![
-                (1, 1.0, 4.0 / 7.0),
-                (2, 8.0, 2.0 / 7.0),
-                (4, 64.0, 1.0 / 7.0),
-            ],
-        ] {
+    //println!("num_servers {}", num_servers,);
+    //println!("num_jobs {}", num_jobs);
+    println!(
+        "let num_jobs = if rho < 0.85 {{
+        1e7
+    }} else {{
+        1e8
+    }} as usize;"
+    );
+
+    let dist_lists = vec![vec![(1, 1.0 / 2.0, 1.0 / 2.0), (4, 2.0 / 3.0, 1.0 / 2.0)]];
+    for dist_list in &dist_lists {
+        let dist = Dist::new(dist_list);
+        println!(
+            "E[s] {}, E[service] {}, dist {:?}",
+            dist.mean_size(),
+            dist.mean_service_time(),
+            dist_list,
+        );
+    }
+    print!("rho;");
+    for policy in &policies {
+        print!("{:?} s_1 < s_4;", policy);
+    }
+    for policy in &policies {
+        print!("{:?} s_4 < s_1;", policy);
+    }
+    println!();
+    for rho in rhos.clone() {
+        print!("{};", rho);
+        let num_jobs = if rho < 0.85 { 1e7 } else { 1e8 } as u64;
+        for num_servers_exp in vec![1, 2, 3, 4] {
+            let num_servers = 1 << num_servers_exp;
+            let dist_list = (0..=num_servers_exp)
+                .map(|i| (1 << i, (1 << i) as f64/num_servers as f64, 1.0 / (num_servers_exp + 1) as f64))
+                .collect();
             let dist = Dist::new(&dist_list);
-            println!(
-                "E[s] {}, E[service] {}, dist {:?}, num_jobs {}, num_servers {}",
-                dist.mean_size(),
-                dist.mean_service_time(),
-                dist_list,
-                num_jobs,
-                num_servers,
-            );
-            print!("rho,E[T_Q^MG1],E[T_Q^MG1] + w_max,");
             for policy in &policies {
-                print!("{:?} min,{:?} max", policy, policy);
-            }
-            println!();
-            for rho in vec![0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99] {
-                let mut all_means = vec![];
-                for policy in &policies {
-                    let mut min_mean = INFINITY;
-                    let mut max_mean = 0.0;
-                    for seed in 0..5 {
-                        let results =
-                            simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
-                        min_mean = min_mean.min(results.mean_response_time);
-                        max_mean = max_mean.max(results.mean_response_time);
-                    }
-                    all_means.push((min_mean, max_mean));
-                }
-                let all_data: String = all_means
-                    .iter()
-                    .map(|(a, b)| format!("{},{},", a, b))
-                    .collect();
-                let mg1_etq = rho * (dist.mean_size_excess() / num_servers as f64) / (1.0 - rho);
-                println!(
-                    "{},{},{},{}",
-                    rho,
-                    mg1_etq,
-                    mg1_etq + dist.max_work(num_servers),
-                    all_data,
-                );
+                let results =
+                    simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
+                print!("{};", results.mean_response_time);
             }
         }
+        println!();
     }
 }
 fn main() {
