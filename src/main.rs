@@ -111,13 +111,37 @@ enum Policy {
     ConservativeBackfilling,
     RandomizedTimers,
     StallingMaxWeight(f64),
+    // SRPT-like
+    GreedySRPT,
+    FirstFitSRPT,
+    ServerFillingSRPT,
 }
 
 impl Policy {
     fn has_shadow(&self) -> bool {
         match self {
-            Policy::ServerFilling | Policy::PreemptiveFirstFit | Policy::FCFS => false,
+            Policy::ServerFilling
+            | Policy::PreemptiveFirstFit
+            | Policy::FCFS
+            | Policy::GreedySRPT
+            | Policy::FirstFitSRPT
+            | Policy::ServerFillingSRPT => false,
             Policy::MaxWeight | Policy::LeastServersFirst | Policy::MostServersFirst => true,
+            _ => unimplemented!(),
+        }
+    }
+    fn has_ordering(&self) -> bool {
+        match self {
+            Policy::GreedySRPT | Policy::FirstFitSRPT | Policy::ServerFillingSRPT => true,
+            _ => false,
+        }
+    }
+    fn ordering(&self, job: &Job) -> f64 {
+        match self {
+            // SRPT
+            Policy::GreedySRPT | Policy::FirstFitSRPT | Policy::ServerFillingSRPT => {
+                job.remaining_service * job.num_servers as f64
+            }
             _ => unimplemented!(),
         }
     }
@@ -128,7 +152,7 @@ impl Policy {
         shadow_indices: &mut Vec<usize>,
     ) -> Vec<usize> {
         let indices = match self {
-            Policy::ServerFilling => {
+            Policy::ServerFilling | Policy::ServerFillingSRPT => {
                 let mut front_size = 0;
                 let mut servers_occupied_by_front = 0;
                 for (i, job) in queue.iter().enumerate() {
@@ -156,7 +180,7 @@ impl Policy {
                 }
                 service
             }
-            Policy::FCFS => {
+            Policy::FCFS | Policy::GreedySRPT => {
                 let mut servers_occupied = 0;
                 let mut service = vec![];
                 for (i, job) in queue.iter().enumerate() {
@@ -169,7 +193,7 @@ impl Policy {
                 }
                 service
             }
-            Policy::PreemptiveFirstFit => {
+            Policy::PreemptiveFirstFit | Policy::FirstFitSRPT => {
                 let mut servers_occupied = 0;
                 let mut service = vec![];
                 for (i, job) in queue.iter().enumerate() {
@@ -296,16 +320,12 @@ struct Recording {
     num_completed: u64,
     total_queueing_time: f64,
     num_served: u64,
-    total_monotonic_queueing_time: f64,
-    num_monotonic_served: u64,
 }
 impl Recording {
     fn output(&self) -> Results {
         Results {
             mean_response_time: self.total_response_time / self.num_completed as f64,
             mean_queueing_time: self.total_queueing_time / self.num_served as f64,
-            mean_monotonic_queueing_time: self.total_monotonic_queueing_time
-                / self.num_monotonic_served as f64,
         }
     }
 }
@@ -313,14 +333,12 @@ impl Recording {
 struct Results {
     mean_response_time: f64,
     mean_queueing_time: f64,
-    mean_monotonic_queueing_time: f64,
 }
 impl Results {
     fn new_failure() -> Results {
         Results {
             mean_response_time: INFINITY,
             mean_queueing_time: INFINITY,
-            mean_monotonic_queueing_time: INFINITY,
         }
     }
 }
@@ -347,11 +365,13 @@ fn simulate(
     let mut num_completed = 0;
     let mut num_arrivals = 0;
     let mut served_and_incomplete: HashSet<N64> = HashSet::new();
-    let mut newest_served = None;
     let debug = false;
     while num_completed < num_jobs || queue.len() > 0 {
         if queue.len() > kill_above {
             return Results::new_failure();
+        }
+        if policy.has_ordering() {
+            queue.sort_by_key(|job| n64(policy.ordering(job)))
         }
         let service = policy.serve(&queue, num_servers, &mut shadow_indices);
         if debug {
@@ -364,34 +384,11 @@ fn simulate(
             .min_by_key(|&f| n64(f))
             .unwrap_or(INFINITY);
         for &index in &service {
-            if newest_served.map_or(true, |newest| index > newest) {
-                for i in newest_served.map_or(0, |newest| newest + 1)..=index {
-                    let monotonic_queueing = time - queue[i].arrival_time;
-                    recording.total_monotonic_queueing_time += monotonic_queueing;
-                    recording.num_monotonic_served += 1;
-                    newest_served = Some(index);
-                }
-            }
             if !served_and_incomplete.contains(&n64(queue[index].arrival_time)) {
                 recording.total_queueing_time += time - queue[index].arrival_time;
                 recording.num_served += 1;
                 served_and_incomplete.insert(n64(queue[index].arrival_time));
             }
-            if recording.num_monotonic_served < recording.num_served {
-                dbg!(
-                    &queue,
-                    &service,
-                    num_servers,
-                    next_arrival_time,
-                    &served_and_incomplete,
-                    newest_served,
-                    num_arrivals,
-                    index,
-                    recording.num_served,
-                    recording.num_monotonic_served,
-                );
-            }
-            assert!(recording.num_monotonic_served >= recording.num_served);
         }
         let next_event_time = next_arrival_time.min(time + min_service);
         let next_event_duration = next_event_time - time;
@@ -433,8 +430,6 @@ fn simulate(
                     dbg!(&job);
                     assert!(job.remaining_service >= -EPSILON);
                 }
-                newest_served = newest_served.expect("Nonempty").checked_sub(1);
-
                 // Stats
                 let response_time = time - job.arrival_time;
                 recording.total_response_time += response_time;
@@ -581,11 +576,10 @@ fn many() {
         for policy in &policies {
             let results = simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
             println!(
-                "{:?},{},{},{}",
+                "{:?},{},{}",
                 policy,
                 results.mean_response_time,
                 results.mean_queueing_time,
-                results.mean_monotonic_queueing_time
             );
         }
         println!();
@@ -593,71 +587,50 @@ fn many() {
 }
 
 fn plots() {
-    //let num_servers = 4;
+    let num_servers = 8;
     let seed = 0;
+    let num_jobs = 1e7 as u64;
+    println!("num_jobs {} num_servers {} seed {}", num_jobs, num_servers, seed);
 
     let policies = vec![
         Policy::ServerFilling,
-        /*
-        Policy::FCFS,
-        //Policy::PreemptiveFirstFit,
         Policy::MaxWeight,
-        Policy::LeastServersFirst,
-        Policy::MostServersFirst,
+        Policy::ServerFillingSRPT,
+        /*
+        Policy::FirstFitSRPT,
+        Policy::GreedySRPT,
         */
     ];
     let rhos = vec![
-        0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.72,
-        0.74, 0.76, 0.78, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.92, 0.94,
-        0.96, /*0.903, 0.906, 0.91, 0.913, 0.916, 0.92,
-              0.923, 0.926, 0.93, 0.933, 0.936, 0.94, 0.943, 0.946, 0.95, 0.953, 0.956, 0.96, 0.97,
-              0.973, 0.976, 0.98, 0.983, 0.986, 0.99, 0.993, 0.996,*/
+       // 0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.72,
+       // 0.74, 0.76, 0.78, 0.8, 0.82, 0.84,
+        0.86, 0.88, 0.9, 0.92, 0.94, 0.96, 0.98, 0.99,
     ];
-    //let rhos = vec![0.86, 0.88, 0.9, 0.92, 0.94, 0.96];
-    //let num_jobs = 1e8 as u64;
 
-    //println!("num_servers {}", num_servers,);
-    //println!("num_jobs {}", num_jobs);
+
+    let dist_list = vec![
+        (1, 1.0, 1.0 / 4.0),
+        (2, 2.0, 1.0 / 4.0),
+        (4, 4.0, 1.0 / 4.0),
+        (8, 8.0, 1.0 / 4.0),
+    ];
+    let dist = Dist::new(&dist_list);
     println!(
-        "let num_jobs = if rho < 0.85 {{
-        1e7
-    }} else {{
-        1e8
-    }} as usize;"
+        "E[s] {}, E[service] {}, dist {:?}",
+        dist.mean_size(),
+        dist.mean_service_time(),
+        dist,
     );
-
-    let dist_lists = vec![vec![(1, 1.0 / 2.0, 1.0 / 2.0), (4, 2.0 / 3.0, 1.0 / 2.0)]];
-    for dist_list in &dist_lists {
-        let dist = Dist::new(dist_list);
-        println!(
-            "E[s] {}, E[service] {}, dist {:?}",
-            dist.mean_size(),
-            dist.mean_service_time(),
-            dist_list,
-        );
-    }
     print!("rho;");
     for policy in &policies {
-        print!("{:?} s_1 < s_4;", policy);
-    }
-    for policy in &policies {
-        print!("{:?} s_4 < s_1;", policy);
+        print!("{:?};", policy);
     }
     println!();
     for rho in rhos.clone() {
         print!("{};", rho);
-        let num_jobs = if rho < 0.85 { 1e7 } else { 1e8 } as u64;
-        for num_servers_exp in vec![1, 2, 3, 4] {
-            let num_servers = 1 << num_servers_exp;
-            let dist_list = (0..=num_servers_exp)
-                .map(|i| (1 << i, (1 << i) as f64/num_servers as f64, 1.0 / (num_servers_exp + 1) as f64))
-                .collect();
-            let dist = Dist::new(&dist_list);
-            for policy in &policies {
-                let results =
-                    simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
-                print!("{};", results.mean_response_time);
-            }
+        for policy in &policies {
+            let results = simulate(policy, dist.clone(), num_servers, rho, num_jobs, seed, 5000);
+            print!("{};", results.mean_response_time);
         }
         println!();
     }

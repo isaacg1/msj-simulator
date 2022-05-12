@@ -1,0 +1,19 @@
+let num_jobs = if rho < 0.85 {
+        1e7
+    } else {
+        1e8
+    } as usize;
+E[s] 4, E[service] 1.75, dist [(1, 0.5, 0.5), (4, 0.6666666666666666, 0.5)]
+rho;MaxWeight s_1 < s_4;MaxWeight s_4 < s_1;
+0.95;27.024676817034443;
+0.96;31.9252189897699;
+0.97;40.028355871473714;
+let num_jobs = if rho < 0.85 {
+        1e7
+    } else {
+        1e8
+    } as usize;
+E[s] 4, E[service] 1.75, dist [(1, 0.5, 0.5), (4, 0.6666666666666666, 0.5)]
+rho;MaxWeight s_1 < s_4;MaxWeight s_4 < s_1;
+0.98;56.13587259525587;
+0.99;104.39341365597363;
