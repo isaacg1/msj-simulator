@@ -1,4 +1,7 @@
 import matplotlib.pyplot as plt
+plt.rcParams['pdf.fonttype'] = 42
+plt.rcParams['ps.fonttype'] = 42
+
 
 data_exp = """\
 rho;ServerFilling;MaxWeight;ServerFillingSRPT;MostServersFirst;SRPT-1
