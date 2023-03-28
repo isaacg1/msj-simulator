@@ -12,6 +12,7 @@ const EPSILON: f64 = 1e-6;
 struct Job {
     arrival_time: f64,
     remaining_service: f64,
+    original_service: f64,
     num_servers: u64,
 }
 
@@ -122,6 +123,8 @@ impl Policy {
         match self {
             Policy::ServerFilling
             | Policy::PreemptiveFirstFit
+            | Policy::FirstFit
+            | Policy::EASYBackfilling
             | Policy::FCFS
             | Policy::GreedySRPT
             | Policy::FirstFitSRPT
@@ -205,6 +208,80 @@ impl Policy {
                         }
                     }
                 }
+                service
+            }
+            Policy::EASYBackfilling => {
+                let mut servers_occupied = 0;
+                let mut service = vec![];
+                for (i, job) in queue.iter().enumerate() {
+                    if job.original_service > job.remaining_service {
+                        service.push(i);
+                        servers_occupied += job.num_servers;
+                    }
+                }
+                assert!(servers_occupied <= num_servers);
+                let mut blocking = 0;
+                for (i, job) in queue.iter().enumerate() {
+                    if !service.contains(&i) {
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                        } else {
+                            blocking = job.num_servers;
+                            break;
+                        }
+                    }
+                    if servers_occupied == num_servers {
+                        break;
+                    }
+                }
+                service.sort_by_key(|j| n64(queue[*j].remaining_service));
+                let mut freed = num_servers - servers_occupied;
+                let mut blocking_duration = 0.0;
+                for j in &service {
+                    let job = &queue[*j];
+                    freed += job.num_servers;
+                    if freed >= blocking {
+                        blocking_duration = job.remaining_service;
+                        break
+                    }
+                }
+                for (i, job) in queue.iter().enumerate() {
+                    if !service.contains(&i) && job.remaining_service < blocking_duration {
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                        }
+                    }
+                    if servers_occupied == num_servers {
+                        break;
+                    }
+                }
+                let total_service: u64 = service.iter().map(|i| queue[*i].num_servers).sum();
+                assert!(total_service <= num_servers);
+                service
+            }
+            Policy::FirstFit => {
+                let mut servers_occupied = 0;
+                let mut service = vec![];
+                for (i, job) in queue.iter().enumerate() {
+                    if job.original_service > job.remaining_service {
+                        service.push(i);
+                        servers_occupied += job.num_servers;
+                    }
+                }
+                assert!(servers_occupied <= num_servers);
+                for (i, job) in queue.iter().enumerate() {
+                    if !service.contains(&i) && servers_occupied + job.num_servers <= num_servers {
+                        servers_occupied += job.num_servers;
+                        service.push(i);
+                    }
+                    if servers_occupied == num_servers {
+                        break;
+                    }
+                }
+                let total_service: u64 = service.iter().map(|i| queue[*i].num_servers).sum();
+                assert!(total_service <= num_servers);
                 service
             }
             Policy::MaxWeight => {
@@ -445,6 +522,7 @@ fn simulate(
                 let new_job = Job {
                     arrival_time: time,
                     remaining_service: service,
+                    original_service: service,
                     num_servers: n,
                 };
                 queue.push(new_job);
@@ -588,11 +666,11 @@ fn many() {
 
 fn plots() {
     let seed = 0;
-    let num_jobs = 1e5 as u64;
+    let num_jobs = 1e6 as u64;
     println!("num_jobs {} seed {}", num_jobs, seed);
 
     let p = 0.5 - 1.5 / (11.0).sqrt();
-    let dist_choice = 2;
+    let dist_choice = 3;
     let dist_list = match dist_choice {
         0 => vec![
             (1, 1.0, 1.0 / 4.0),
@@ -620,17 +698,24 @@ fn plots() {
             (8, 1.0, 1.0 / 4.0),
             ]
         }
+        3 => {
+            vec![
+            (2, 1.0, 1.0 / 2.0),
+            (3, 1.0, 1.0 / 2.0),
+            ]
+        }
         _ => unimplemented!(),
     };
     let dist = Dist::new(&dist_list);
     let srpt_dist = Dist::new(&vec![(1, 16.0 * p, p), (1, 16.0 * (1.0 - p), (1.0 - p))]);
     let policies_servers_dist = vec![
-        (Policy::ServerFilling, 8, dist.clone()),
-        (Policy::MaxWeight, 8, dist.clone()),
-        (Policy::MostServersFirst, 8, dist.clone()),
-        (Policy::FCFS, 8, dist.clone()),
-        (Policy::ServerFillingSRPT, 8, dist.clone()),
-        (Policy::PreemptiveFirstFit, 8, dist.clone()),
+        //(Policy::ServerFilling, 6, dist.clone()),
+        (Policy::MaxWeight, 6, dist.clone()),
+        (Policy::MostServersFirst, 6, dist.clone()),
+        (Policy::FCFS, 6, dist.clone()),
+        //(Policy::ServerFillingSRPT, 6, dist.clone()),
+        (Policy::FirstFit, 6, dist.clone()),
+        (Policy::EASYBackfilling, 6, dist.clone()),
         //(Policy::GreedySRPT, 8, dist.clone()),
         //(Policy::FirstFitSRPT, 8, dist.clone()),
         //(Policy::GreedySRPT, 1, Dist::new(&vec![(1, 8.0, 1.0)])),
