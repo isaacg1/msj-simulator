@@ -588,11 +588,11 @@ fn many() {
 
 fn plots() {
     let seed = 0;
-    let num_jobs = 1e7 as u64;
+    let num_jobs = 1e5 as u64;
     println!("num_jobs {} seed {}", num_jobs, seed);
 
     let p = 0.5 - 1.5 / (11.0).sqrt();
-    let dist_choice = 1;
+    let dist_choice = 2;
     let dist_list = match dist_choice {
         0 => vec![
             (1, 1.0, 1.0 / 4.0),
@@ -612,36 +612,40 @@ fn plots() {
                 (8, 16.0 * (1.0 - p), (1.0 - p) / 4.0),
             ]
         }
+        2 => {
+            vec![
+            (1, 1.0, 1.0 / 4.0),
+            (2, 1.0, 1.0 / 4.0),
+            (4, 1.0, 1.0 / 4.0),
+            (8, 1.0, 1.0 / 4.0),
+            ]
+        }
         _ => unimplemented!(),
     };
     let dist = Dist::new(&dist_list);
-    let srpt_dist = Dist::new(&vec![
-                (1, 16.0 * p, p),
-                (1, 16.0 * (1.0 - p), (1.0 - p)),
-                ]);
+    let srpt_dist = Dist::new(&vec![(1, 16.0 * p, p), (1, 16.0 * (1.0 - p), (1.0 - p))]);
     let policies_servers_dist = vec![
-        //(Policy::ServerFilling, 8, dist.clone()),
-        //(Policy::MaxWeight, 8, dist.clone()),
+        (Policy::ServerFilling, 8, dist.clone()),
+        (Policy::MaxWeight, 8, dist.clone()),
         (Policy::MostServersFirst, 8, dist.clone()),
-        //(Policy::ServerFillingSRPT, 8, dist.clone()),
+        (Policy::FCFS, 8, dist.clone()),
+        (Policy::ServerFillingSRPT, 8, dist.clone()),
+        (Policy::PreemptiveFirstFit, 8, dist.clone()),
+        //(Policy::GreedySRPT, 8, dist.clone()),
+        //(Policy::FirstFitSRPT, 8, dist.clone()),
         //(Policy::GreedySRPT, 1, Dist::new(&vec![(1, 8.0, 1.0)])),
         //(Policy::GreedySRPT, 1, srpt_dist),
         //(Policy::FirstFitSRPT, 8, dist.clone()),
-        //(Policy::GreedySRPT, 8, dist.clone()),
     ];
     let rhos = vec![
-    /*
         0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35,
-        0.4, 0.42, 0.45, 0.47, 0.5, 0.52, 0.55, 0.57, 0.6, 0.62, 0.65, 0.67,
-        0.7, 0.72,
-        0.74, 0.76, 0.78, 0.8, 0.82,
-        */
-        0.84, 0.86, 0.88, 0.9, 0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.985, 0.99,
-        0.993, 0.996, 0.997,
-        0.998, 0.999,
+        0.4, 0.42, 0.45, 0.47, 0.5, 0.52, 0.55, 0.57, 0.6,
+        0.62, 0.65, 0.67, 0.7,
+        0.72, 0.74, 0.76, 0.78, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.92, 0.94,
+        0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.993, 0.996, 0.997, 0.998, 0.999,
     ];
 
-    //println!("{:#?}", policies_servers_dist);
+    //println!("{:?}", policies_servers_dist);
     print!("rho;");
     for (policy, _, _) in &policies_servers_dist {
         print!("{:?};", policy);
