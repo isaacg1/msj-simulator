@@ -38,20 +38,57 @@ rho;ServerFilling;MaxWeight;MostServersFirst;FCFS;ServerFillingSRPT;EASYBackFill
 0.999;inf;inf;inf;inf;31.66869367609917;inf;
 """
 
+data_srpt = """rho;GreedySRPT;
+0.5;0.5897642181836797;
+0.52;0.6019929167552603;
+0.55;0.6219595016350867;
+0.57;0.6364162742267989;
+0.6;0.6600407026233585;
+0.62;0.6773289420638801;
+0.65;0.7060393506254384;
+0.67;0.7275417514713478;
+0.7;0.7638263193848388;
+0.72;0.7917273015018494;
+0.74;0.8230450286711439;
+0.76;0.8580456641751358;
+0.78;0.8982570734106008;
+0.8;0.9452158589755185;
+0.82;1.000034911758185;
+0.84;1.064969903494911;
+0.86;1.1446879496058104;
+0.88;1.2496931201665844;
+0.9;1.3936883876904036;
+0.92;1.6117601068828404;
+0.94;1.9648369347614034;
+0.95;2.228633537302444;
+0.96;2.5970220974602247;
+0.97;3.2092117228137025;
+0.98;4.359214686930588;
+0.985;5.540907895497002;
+0.99;8.89765547632876;
+0.993;13.628653118573649;
+0.996;20.312826714820492;
+0.997;22.935890020838098;
+0.998;25.734710813111533;
+0.999;28.782677002191242;"""
 rows = data.split()
 names = rows[0].split(";")
 nums = [[float(cell) if cell != "inf" else 1000 for cell in row.split(";") if cell] for row in rows[1:]]
-plt.figure(figsize=(8, 3))
+plt.figure(figsize=(8, 5))
 #dashes = [(None, None), (2, 2), (5, 5), (1, 1, 5, 1), (None, None), (None, None)]
 for i in [4,2,3,6,1,5]:
     rhos = [row[0] for row in nums]
-    means = [row[i] - 1 for row in nums]
+    means = [row[i] for row in nums]
     plt.plot(rhos, means, label=names[i],)# dashes=dashes[i])
+plt.plot(rhos, [float(row.split(";")[1]) for row in data_srpt.split()[1:]], label="SRPT-1")
+rhos = [row[0] for row in nums]
+theory = [rho / (1 - rho) * 33 / 40 + 1 for rho in rhos]
+plt.plot(rhos, theory, label="Theory for ServerFilling")
 plt.xlim(0.5, 1)
 plt.ylim(0, 30)
 plt.xlabel("Load $\\rho$")
-plt.ylabel("Mean waiting time $E[W]$")
+plt.ylabel("Mean response time $E[T]$")
 plt.legend(loc="upper center")
-plt.savefig("waiting-applied.eps", bbox_inches="tight")
+plt.savefig("response-talk-applied.eps", bbox_inches="tight")
 
 
