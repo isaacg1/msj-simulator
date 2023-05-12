@@ -14,6 +14,7 @@ struct Job {
     remaining_service: f64,
     original_service: f64,
     num_servers: u64,
+    id: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -402,12 +403,15 @@ struct Recording {
     num_completed: u64,
     total_queueing_time: f64,
     num_served: u64,
+    total_preemptions: u64,
 }
 impl Recording {
     fn output(&self) -> Results {
         Results {
             mean_response_time: self.total_response_time / self.num_completed as f64,
             mean_queueing_time: self.total_queueing_time / self.num_served as f64,
+            // Completion counts as a preemption.
+            preemptions_per_job: (self.total_preemptions + 1 - self.num_completed) as f64 / self.num_completed as f64,
         }
     }
 }
@@ -415,12 +419,14 @@ impl Recording {
 struct Results {
     mean_response_time: f64,
     mean_queueing_time: f64,
+    preemptions_per_job: f64,
 }
 impl Results {
     fn new_failure() -> Results {
         Results {
             mean_response_time: INFINITY,
             mean_queueing_time: INFINITY,
+            preemptions_per_job: INFINITY,
         }
     }
 }
@@ -447,7 +453,8 @@ fn simulate(
     let mut num_completed = 0;
     let mut num_arrivals = 0;
     let mut served_and_incomplete: HashSet<N64> = HashSet::new();
-    let debug = false;
+    let mut last_service: HashSet<u64> = HashSet::new();
+    let debug = false; //matches!(policy, &Policy::FCFS);
     while num_completed < num_jobs || queue.len() > 0 {
         if queue.len() > kill_above {
             return Results::new_failure();
@@ -456,8 +463,9 @@ fn simulate(
             queue.sort_by_key(|job| n64(policy.ordering(job)))
         }
         let service = policy.serve(&queue, num_servers, &mut shadow_indices);
+        let service_ids: HashSet<u64> = service.iter().map(|&index| queue[index].id).collect();
         if debug {
-            dbg!(&queue, &service,);
+            dbg!(&queue, &service, recording.total_preemptions, recording.num_completed);
             std::io::stdin().read_line(&mut String::new()).unwrap();
         }
         let min_service: f64 = service
@@ -529,6 +537,7 @@ fn simulate(
                     remaining_service: service,
                     original_service: service,
                     num_servers: n,
+                    id: num_arrivals,
                 };
                 queue.push(new_job);
                 if policy.has_shadow() {
@@ -537,6 +546,13 @@ fn simulate(
                 num_arrivals += 1;
             }
         }
+        // Preemption stats - completion is counted as a preemption
+        for id in last_service {
+            if !service_ids.contains(&id) {
+                recording.total_preemptions += 1;
+            }
+        }
+        last_service = service_ids;
     }
     /*
     if queue.len() > 100 {
@@ -728,21 +744,17 @@ fn plots() {
     let srpt_dist = Dist::new(&vec![(1, 8.0, 2.0/3.0), (1, 1.0, 1.0/3.0)]);
     let k = 8;
     let policies_servers_dist = vec![
-    /*
         (Policy::ServerFilling, k, dist.clone()),
         (Policy::MaxWeight, k, dist.clone()),
         (Policy::MostServersFirst, k, dist.clone()),
         (Policy::FCFS, k, dist.clone()),
         (Policy::ServerFillingSRPT, k, dist.clone()),
-        */
-        //(Policy::FirstFit, k, dist.clone()),
-        /*
         (Policy::EASYBackfilling, k, dist.clone()),
-        */
+        //(Policy::FirstFit, k, dist.clone()),
         //(Policy::GreedySRPT, 8, dist.clone()),
         //(Policy::FirstFitSRPT, 8, dist.clone()),
         //(Policy::GreedySRPT, 1, Dist::new(&vec![(1, 8.0, 1.0)])),
-        (Policy::GreedySRPT, 1, srpt_dist),
+        //(Policy::GreedySRPT, 1, srpt_dist),
         //(Policy::FirstFitSRPT, 8, dist.clone()),
     ];
     let rhos = vec![
@@ -773,7 +785,7 @@ fn plots() {
                 seed,
                 5000,
             );
-            print!("{};", results.mean_response_time);
+            print!("{};", results.preemptions_per_job);
         }
         println!();
     }
