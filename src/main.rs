@@ -110,6 +110,7 @@ enum Policy {
     BestFit,
     FirstFit,
     EASYBackfilling,
+    EASYBackfillingEstimate(f64),
     ConservativeBackfilling,
     RandomizedTimers,
     StallingMaxWeight(f64),
@@ -126,6 +127,7 @@ impl Policy {
             | Policy::PreemptiveFirstFit
             | Policy::FirstFit
             | Policy::EASYBackfilling
+            | Policy::EASYBackfillingEstimate(_)
             | Policy::FCFS
             | Policy::GreedySRPT
             | Policy::FirstFitSRPT
@@ -244,11 +246,71 @@ impl Policy {
                     freed += job.num_servers;
                     if freed >= blocking {
                         blocking_duration = job.remaining_service;
-                        break
+                        break;
                     }
                 }
                 for (i, job) in queue.iter().enumerate() {
                     if !service.contains(&i) && job.remaining_service < blocking_duration {
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                        }
+                    }
+                    if servers_occupied == num_servers {
+                        break;
+                    }
+                }
+                let total_service: u64 = service.iter().map(|i| queue[*i].num_servers).sum();
+                assert!(total_service <= num_servers);
+                /*
+                for i in &service {
+                    assert_eq!(service.iter().filter(|j| i == *j).count(), 1);
+                }
+                */
+                service
+            }
+            Policy::EASYBackfillingEstimate(quality) => {
+                let mut servers_occupied = 0;
+                let mut service = vec![];
+                for (i, job) in queue.iter().enumerate() {
+                    if job.original_service > job.remaining_service {
+                        service.push(i);
+                        servers_occupied += job.num_servers;
+                    }
+                }
+                assert!(servers_occupied <= num_servers);
+                let mut blocking = 0;
+                for (i, job) in queue.iter().enumerate() {
+                    if !service.contains(&i) {
+                        if servers_occupied + job.num_servers <= num_servers {
+                            servers_occupied += job.num_servers;
+                            service.push(i);
+                        } else {
+                            blocking = job.num_servers;
+                            break;
+                        }
+                    }
+                    if servers_occupied == num_servers {
+                        break;
+                    }
+                }
+                let round = &|f: f64| quality.powf(f.log(*quality).ceil());
+                let rounded_rem = &|j: &Job| {
+                    round(j.original_service) - (j.original_service - j.remaining_service)
+                };
+                service.sort_by_key(|j| n64(rounded_rem(&queue[*j])));
+                let mut freed = num_servers - servers_occupied;
+                let mut blocking_duration = 0.0;
+                for j in &service {
+                    let job = &queue[*j];
+                    freed += job.num_servers;
+                    if freed >= blocking {
+                        blocking_duration = rounded_rem(job);
+                        break;
+                    }
+                }
+                for (i, job) in queue.iter().enumerate() {
+                    if !service.contains(&i) && rounded_rem(job) < blocking_duration {
                         if servers_occupied + job.num_servers <= num_servers {
                             servers_occupied += job.num_servers;
                             service.push(i);
@@ -411,7 +473,8 @@ impl Recording {
             mean_response_time: self.total_response_time / self.num_completed as f64,
             mean_queueing_time: self.total_queueing_time / self.num_served as f64,
             // Completion counts as a preemption.
-            preemptions_per_job: (self.total_preemptions + 1 - self.num_completed) as f64 / self.num_completed as f64,
+            preemptions_per_job: (self.total_preemptions + 1 - self.num_completed) as f64
+                / self.num_completed as f64,
         }
     }
 }
@@ -465,7 +528,12 @@ fn simulate(
         let service = policy.serve(&queue, num_servers, &mut shadow_indices);
         let service_ids: HashSet<u64> = service.iter().map(|&index| queue[index].id).collect();
         if debug {
-            dbg!(&queue, &service, recording.total_preemptions, recording.num_completed);
+            dbg!(
+                &queue,
+                &service,
+                recording.total_preemptions,
+                recording.num_completed
+            );
             std::io::stdin().read_line(&mut String::new()).unwrap();
         }
         let min_service: f64 = service
@@ -713,43 +781,43 @@ fn plots() {
         }
         2 => {
             vec![
-            (1, 1.0, 1.0 / 4.0),
-            (2, 1.0, 1.0 / 4.0),
-            (4, 1.0, 1.0 / 4.0),
-            (8, 1.0, 1.0 / 4.0),
+                (1, 1.0, 1.0 / 4.0),
+                (2, 1.0, 1.0 / 4.0),
+                (4, 1.0, 1.0 / 4.0),
+                (8, 1.0, 1.0 / 4.0),
             ]
         }
         3 => {
             vec![
-            (2, 1.0, 1.0 / 3.0),
-            (4, 1.0, 1.0 / 3.0),
-            (8, 1.0, 1.0 / 3.0),
+                (2, 1.0, 1.0 / 3.0),
+                (4, 1.0, 1.0 / 3.0),
+                (8, 1.0, 1.0 / 3.0),
             ]
         }
         4 => {
-            vec![
-            (2, 1.0, 1.0 / 2.0),
-            (3, 1.0, 1.0 / 2.0),
-            ]
+            vec![(2, 1.0, 1.0 / 2.0), (3, 1.0, 1.0 / 2.0)]
         }
         5 => {
-            vec![
-            (1, 1.0, 2.0 / 3.0),
-            (8, 1.0, 1.0 / 3.0),
-            ]
+            vec![(1, 1.0, 2.0 / 3.0), (8, 1.0, 1.0 / 3.0)]
         }
         _ => unimplemented!(),
     };
     let dist = Dist::new(&dist_list);
-    let srpt_dist = Dist::new(&vec![(1, 8.0, 2.0/3.0), (1, 1.0, 1.0/3.0)]);
+    let srpt_dist = Dist::new(&vec![(1, 8.0, 2.0 / 3.0), (1, 1.0, 1.0 / 3.0)]);
     let k = 8;
     let policies_servers_dist = vec![
+    /*
         (Policy::ServerFilling, k, dist.clone()),
         (Policy::MaxWeight, k, dist.clone()),
         (Policy::MostServersFirst, k, dist.clone()),
         (Policy::FCFS, k, dist.clone()),
         (Policy::ServerFillingSRPT, k, dist.clone()),
+        */
         (Policy::EASYBackfilling, k, dist.clone()),
+        (Policy::EASYBackfillingEstimate(2.0), k, dist.clone()),
+        (Policy::EASYBackfillingEstimate(4.0), k, dist.clone()),
+        (Policy::EASYBackfillingEstimate(8.0), k, dist.clone()),
+        (Policy::EASYBackfillingEstimate(16.0), k, dist.clone()),
         //(Policy::FirstFit, k, dist.clone()),
         //(Policy::GreedySRPT, 8, dist.clone()),
         //(Policy::FirstFitSRPT, 8, dist.clone()),
@@ -760,11 +828,9 @@ fn plots() {
     let rhos = vec![
         //0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35,
         //0.4, 0.42, 0.45, 0.47,
-        0.5, 0.52, 0.55, 0.57, 0.6,
-        0.62, 0.65, 0.67, 0.7,
-        0.72, 0.74, 0.76, 0.78, 0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.92, 0.94,
-        0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.993, 0.996,
-        0.997, 0.998, 0.999,
+        0.5, 0.52, 0.55, 0.57, 0.6, 0.62, 0.65, 0.67, 0.7, 0.72, 0.74, 0.76, 0.78, 0.8, 0.82, 0.84,
+        0.86, 0.88, 0.9, 0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.993, 0.996, 0.997,
+        0.998, 0.999,
     ];
 
     //println!("{:?}", policies_servers_dist);
@@ -785,7 +851,7 @@ fn plots() {
                 seed,
                 5000,
             );
-            print!("{};", results.preemptions_per_job);
+            print!("{};", results.mean_response_time);
         }
         println!();
     }
