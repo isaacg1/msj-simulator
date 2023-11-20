@@ -806,24 +806,23 @@ fn plots() {
     let srpt_dist = Dist::new(&vec![(1, 8.0, 2.0 / 3.0), (1, 1.0, 1.0 / 3.0)]);
     let k = 8;
     let policies_servers_dist = vec![
-    /*
         (Policy::ServerFilling, k, dist.clone()),
         (Policy::MaxWeight, k, dist.clone()),
         (Policy::MostServersFirst, k, dist.clone()),
         (Policy::FCFS, k, dist.clone()),
         (Policy::ServerFillingSRPT, k, dist.clone()),
-        */
         (Policy::EASYBackfilling, k, dist.clone()),
+        /*
         (Policy::EASYBackfillingEstimate(2.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(4.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(8.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(16.0), k, dist.clone()),
-        //(Policy::FirstFit, k, dist.clone()),
-        //(Policy::GreedySRPT, 8, dist.clone()),
-        //(Policy::FirstFitSRPT, 8, dist.clone()),
+        */
+        (Policy::FirstFit, k, dist.clone()),
+        (Policy::GreedySRPT, 8, dist.clone()),
+        (Policy::FirstFitSRPT, 8, dist.clone()),
         //(Policy::GreedySRPT, 1, Dist::new(&vec![(1, 8.0, 1.0)])),
         //(Policy::GreedySRPT, 1, srpt_dist),
-        //(Policy::FirstFitSRPT, 8, dist.clone()),
     ];
     let rhos = vec![
         //0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35,
