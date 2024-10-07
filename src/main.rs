@@ -1,12 +1,14 @@
 use noisy_float::prelude::*;
 use rand::prelude::*;
 use rand_distr::weighted_alias::WeightedAliasIndex;
-use rand_distr::Exp;
+use rand_distr::{Exp, Pareto};
 
 use std::collections::{HashMap, HashSet};
 
 use std::f64::INFINITY;
 const EPSILON: f64 = 1e-6;
+
+const PARETO_MODE: bool = true;
 
 #[derive(Debug)]
 struct Job {
@@ -180,8 +182,9 @@ impl Policy {
                             break;
                         }
                     } else {
-                        dbg!(queue, num_servers);
-                        unreachable!()
+                        // General!
+                        //dbg!(queue, num_servers);
+                        //unreachable!()
                     }
                 }
                 service
@@ -507,7 +510,11 @@ fn simulate(
     let mut queue: Vec<Job> = Vec::new();
     let mut shadow_indices: Vec<usize> = Vec::new();
     let mut time: f64 = 0.0;
-    let mean_size = dist.mean_size();
+    let mean_size = if PARETO_MODE {
+        2.97 * num_servers as f64
+    } else {
+        dist.mean_size()
+    };
     let mean_absolute_size = mean_size / num_servers as f64;
     let lambda = rho / mean_absolute_size;
     let arrival_dist = Exp::new(lambda).unwrap();
@@ -518,6 +525,7 @@ fn simulate(
     let mut served_and_incomplete: HashSet<N64> = HashSet::new();
     let mut last_service: HashSet<u64> = HashSet::new();
     let debug = false; //matches!(policy, &Policy::FCFS);
+    let pareto = Pareto::new(1.0, 1.5).expect("Valid");
     while num_completed < num_jobs || queue.len() > 0 {
         if queue.len() > kill_above {
             return Results::new_failure();
@@ -600,6 +608,28 @@ fn simulate(
             next_arrival_time = time + arrival_dist.sample(&mut rng);
             if num_arrivals < num_jobs {
                 let (n, service) = dist.sample(&mut rng);
+                let service = if PARETO_MODE {
+                    let is_five = true;
+                    let multiplier = if is_five {
+                        match n {
+                            2 => 6.0,
+                            3 => 4.0,
+                            5 => 2.0,
+                            _ => unreachable!(),
+                        }
+                    } else {
+                        num_servers as f64 / n as f64
+                    };
+                    let bound = 1e4;
+                    loop {
+                        let size = pareto.sample(&mut rng);
+                        if size < bound {
+                            break size * multiplier;
+                        }
+                    }
+                } else {
+                    service
+                };
                 let new_job = Job {
                     arrival_time: time,
                     remaining_service: service,
@@ -855,12 +885,75 @@ fn plots() {
         println!();
     }
 }
+fn plots2() {
+    for seed in 0..30 {
+        let num_jobs = 5e6 as u64;
+        println!("num_jobs {} seed {}", num_jobs, seed);
+
+        let dist23 = Dist::new(&vec![
+            (2, 2.0 / 11.0, 5.0 / 11.0),
+            (3, 11.0 / 3.0, 6.0 / 11.0),
+        ]);
+        let dist235 = Dist::new(&vec![
+            (2, 2.0 / 11.0, 5.0 / 11.0),
+            (3, 11.0 / 3.0, 6.0 / 11.0),
+        ]);
+        let srpt_dist = Dist::new(&vec![(1, 1.0, 1.0)]);
+        let k = 11;
+        let policies_servers_dist = vec![
+            (Policy::ServerFillingSRPT, k, dist235.clone()),
+            //(Policy::GreedySRPT, 1, srpt_dist),
+        ];
+        let rhos = vec![
+            //0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35,
+            //0.4, 0.42, 0.45, 0.47,
+            //0.5, 0.52, 0.55, 0.57,
+            0.6, //0.62, 0.65, 0.67,
+            0.7, //0.72, 0.74,
+            0.75, //0.76, 0.78,
+            0.8, //0.82,
+            0.83, //0.84,
+            0.86, //0.88,
+            0.9, 0.92, 0.94,// 0.95,
+            0.96,// 0.97,
+            0.98,// 0.985,
+            0.99,// 0.993, 0.996, 0.997, 0.998, 0.999,
+        ];
+
+        //println!("{:?}", policies_servers_dist);
+        print!("rho;");
+        for (policy, _, _) in &policies_servers_dist {
+            print!("{:?};", policy);
+        }
+        println!();
+        let mut skip = false;
+        for rho in rhos.clone() {
+            print!("{};", rho);
+            for (policy, num_servers, dist) in &policies_servers_dist {
+                if skip { print!("inf;"); continue}
+                let results = simulate(
+                    policy,
+                    dist.clone(),
+                    *num_servers,
+                    rho,
+                    num_jobs,
+                    seed,
+                    5000,
+                );
+                print!("{};", results.mean_response_time);
+                skip = results.mean_response_time > 400.0;
+            }
+            println!();
+        }
+    }
+}
 fn main() {
-    let kind = 2;
+    let kind = 3;
     match kind {
         0 => many(),
         1 => gaps(),
         2 => plots(),
+        3 => plots2(),
         _ => unimplemented!(),
     }
 }
