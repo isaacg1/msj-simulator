@@ -609,7 +609,7 @@ fn simulate(
             if num_arrivals < num_jobs {
                 let (n, service) = dist.sample(&mut rng);
                 let service = if PARETO_MODE {
-                    let is_five = true;
+                    let is_five = false;
                     let multiplier = if is_five {
                         match n {
                             2 => 6.0,
@@ -836,23 +836,23 @@ fn plots() {
     let srpt_dist = Dist::new(&vec![(1, 8.0, 2.0 / 3.0), (1, 1.0, 1.0 / 3.0)]);
     let k = 8;
     let policies_servers_dist = vec![
-        (Policy::ServerFilling, k, dist.clone()),
-        (Policy::MaxWeight, k, dist.clone()),
+        //(Policy::ServerFilling, k, dist.clone()),
+        //(Policy::MaxWeight, k, dist.clone()),
         (Policy::MostServersFirst, k, dist.clone()),
         (Policy::FCFS, k, dist.clone()),
         (Policy::ServerFillingSRPT, k, dist.clone()),
-        (Policy::EASYBackfilling, k, dist.clone()),
+        //(Policy::EASYBackfilling, k, dist.clone()),
         /*
         (Policy::EASYBackfillingEstimate(2.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(4.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(8.0), k, dist.clone()),
         (Policy::EASYBackfillingEstimate(16.0), k, dist.clone()),
         */
-        (Policy::FirstFit, k, dist.clone()),
+        //(Policy::FirstFit, k, dist.clone()),
         (Policy::GreedySRPT, 8, dist.clone()),
         (Policy::FirstFitSRPT, 8, dist.clone()),
         //(Policy::GreedySRPT, 1, Dist::new(&vec![(1, 8.0, 1.0)])),
-        //(Policy::GreedySRPT, 1, srpt_dist),
+        (Policy::GreedySRPT, 1, srpt_dist),
     ];
     let rhos = vec![
         //0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35,
@@ -880,7 +880,7 @@ fn plots() {
                 seed,
                 5000,
             );
-            print!("{};", results.mean_response_time);
+            print!("{};", results.mean_response_time/8.0);
         }
         println!();
     }
@@ -948,7 +948,7 @@ fn plots2() {
     }
 }
 fn main() {
-    let kind = 3;
+    let kind = 2;
     match kind {
         0 => many(),
         1 => gaps(),
